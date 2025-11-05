@@ -55,7 +55,7 @@ public:
   void closeClientScreen(deskflow::Screen *screen);
   void handleClientRestart(const Event &, EventQueueTimer *vtimer);
   void scheduleClientRestart(double retryTime);
-  void handleClientConnected() const;
+  void handleClientConnected();
   void handleClientFailed(const Event &e);
   void handleClientRefused(const Event &e);
   void handleClientDisconnected();

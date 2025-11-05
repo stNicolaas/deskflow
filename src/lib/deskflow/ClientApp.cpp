@@ -68,8 +68,12 @@ ClientApp::ClientApp(IEventQueue *events, const QString &processName) : App(even
 
 double ClientApp::calculateRetryDelay()
 {
+  // This function is called ONCE per full retry cycle (after all DNS addresses exhausted)
+  // NOT once per individual address attempt
+
   // Exponential backoff with jitter
   // Base delay starts at s_minRetryDelay and doubles each time, up to s_maxRetryDelay
+  // Sequence: 1s, 2s, 4s, 8s, 16s, 32s, 60s (max)
   double baseDelay = s_minRetryDelay * std::pow(2.0, std::min(m_retryAttempts, 6));
   baseDelay = std::min(baseDelay, s_maxRetryDelay);
 
@@ -81,7 +85,7 @@ double ClientApp::calculateRetryDelay()
   m_currentRetryDelay = baseDelay * jitter(gen);
   m_retryAttempts++;
 
-  LOG_DEBUG("retry attempt %d, delay %.2f seconds", m_retryAttempts, m_currentRetryDelay);
+  LOG_DEBUG("retry cycle %d, calculated delay %.2f seconds", m_retryAttempts, m_currentRetryDelay);
 
   return m_currentRetryDelay;
 }
@@ -216,7 +220,7 @@ void ClientApp::handleClientConnected()
 {
   LOG_IPC("connected to server");
   // Reset retry state on successful connection
-  const_cast<ClientApp *>(this)->resetRetryState();
+  resetRetryState();
 }
 
 void ClientApp::handleClientFailed(const Event &e)
@@ -224,13 +228,15 @@ void ClientApp::handleClientFailed(const Event &e)
   if ((++m_lastServerAddressIndex) < m_client->getLastResolvedAddressesCount()) {
     std::unique_ptr<Client::FailInfo> info(static_cast<Client::FailInfo *>(e.getData()));
 
-    LOG_WARN("failed to connect to server=%s, trying next address", info->m_what.c_str());
+    LOG_WARN("failed to connect to server=%s, trying next address (attempt %d)",
+             info->m_what.c_str(), m_lastServerAddressIndex + 1);
     if (!m_suspended) {
-      // Use exponential backoff for multi-address retry
-      double retryDelay = calculateRetryDelay();
-      scheduleClientRestart(retryDelay);
+      // Use fixed short delay between addresses in the same retry cycle
+      // Only increment retry counter when all addresses are exhausted
+      scheduleClientRestart(s_retryTime);
     }
   } else {
+    // All addresses exhausted, reset index and move to full retry logic
     m_lastServerAddressIndex = 0;
     handleClientRefused(e);
   }
@@ -267,9 +273,10 @@ void ClientApp::handleClientDisconnected()
 {
   LOG_IPC("disconnected from server");
   if (!m_suspended) {
-    // Use exponential backoff for reconnection attempts
+    // Use exponential backoff for reconnection attempts after unexpected disconnection
     double retryDelay = calculateRetryDelay();
-    LOG_INFO("will attempt to reconnect in %.1f seconds", retryDelay);
+    LOG_INFO("will attempt to reconnect in %.1f seconds (retry attempt %d)",
+             retryDelay, m_retryAttempts);
     scheduleClientRestart(retryDelay);
   }
 }
