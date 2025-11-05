@@ -122,6 +122,8 @@ private:
 
   double m_keepAliveAlarm = 0.0;
   EventQueueTimer *m_keepAliveAlarmTimer = nullptr;
+  int m_keepAliveFailures = 0;
+  static constexpr int s_maxKeepAliveFailures = 3;
 
   MessageParser m_parser = &ServerProxy::parseHandshakeMessage;
   IEventQueue *m_events = nullptr;

@@ -88,8 +88,9 @@ public:
   /*!
   Disconnects from the server with an optional error message.
   Unlike disconnect this function doesn't try to use other ip addresses
+  \p retry controls whether automatic reconnection attempts should be made
   */
-  void refuseConnection(const char *msg);
+  void refuseConnection(const char *msg, bool retry = true);
 
   //! Notify of handshake complete
   /*!

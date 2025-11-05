@@ -79,10 +79,19 @@ public:
 
 private:
   ISocketFactory *getSocketFactory() const;
+  double calculateRetryDelay();
+  void resetRetryState();
 
   bool m_suspended = false;
   Client *m_client = nullptr;
   deskflow::Screen *m_clientScreen = nullptr;
   NetworkAddress *m_serverAddress = nullptr;
   size_t m_lastServerAddressIndex = 0;
+
+  // Retry state management
+  int m_retryAttempts = 0;
+  double m_currentRetryDelay = 1.0;
+  static constexpr double s_minRetryDelay = 1.0;
+  static constexpr double s_maxRetryDelay = 60.0;
+  static constexpr int s_maxRetryAttempts = 100;
 };

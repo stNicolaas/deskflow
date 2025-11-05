@@ -71,6 +71,8 @@ void ServerProxy::resetKeepAliveAlarm()
     m_keepAliveAlarmTimer = m_events->newOneShotTimer(m_keepAliveAlarm, nullptr);
     m_events->addHandler(EventTypes::Timer, m_keepAliveAlarmTimer, [this](const auto &) { handleKeepAliveAlarm(); });
   }
+  // Reset failure counter when we receive valid data
+  m_keepAliveFailures = 0;
 }
 
 void ServerProxy::setKeepAliveRate(double rate)
@@ -172,25 +174,32 @@ ServerProxy::ConnectionResult ServerProxy::parseHandshakeMessage(const uint8_t *
     int32_t minor;
     ProtocolUtil::readf(m_stream, kMsgEIncompatible + 4, &major, &minor);
     LOG_ERR("server has incompatible version %d.%d", major, minor);
-    m_client->refuseConnection("server has incompatible version");
+    // Incompatible version - don't retry automatically
+    m_client->refuseConnection("server has incompatible version", false);
     return Disconnect;
   }
 
   else if (memcmp(code, kMsgEBusy, 4) == 0) {
     LOG_ERR("server already has a connected client with name \"%s\"", m_client->getName().c_str());
-    m_client->refuseConnection("server already has a connected client with our name");
+    LOG_NOTE("the other client may be a stale connection; will retry with backoff");
+    // Server busy with duplicate client name - allow retry but with exponential backoff
+    // The other client might be a zombie/stale connection that will eventually timeout
+    m_client->refuseConnection("server already has a connected client with our name", true);
     return Disconnect;
   }
 
   else if (memcmp(code, kMsgEUnknown, 4) == 0) {
     LOG_ERR("server refused client with name \"%s\"", m_client->getName().c_str());
-    m_client->refuseConnection("server refused client with our name");
+    LOG_NOTE("client name may not be configured on the server");
+    // Unknown client name - don't retry automatically (needs server config change)
+    m_client->refuseConnection("server refused client with our name", false);
     return Disconnect;
   }
 
   else if (memcmp(code, kMsgEBad, 4) == 0) {
     LOG_ERR("server disconnected due to a protocol error");
-    m_client->refuseConnection("server reported a protocol error");
+    // Protocol error - don't retry automatically
+    m_client->refuseConnection("server reported a protocol error", false);
     return Disconnect;
   } else if (memcmp(code, kMsgDLanguageSynchronisation, 4) == 0) {
     setServerLanguages();
@@ -332,8 +341,16 @@ ServerProxy::ConnectionResult ServerProxy::parseMessage(const uint8_t *code)
 
 void ServerProxy::handleKeepAliveAlarm()
 {
-  LOG_NOTE("server is dead");
-  m_client->disconnect("server is not responding");
+  m_keepAliveFailures++;
+
+  if (m_keepAliveFailures >= s_maxKeepAliveFailures) {
+    LOG_NOTE("server is not responding (missed %d keep-alives)", m_keepAliveFailures);
+    m_client->disconnect("server is not responding");
+  } else {
+    LOG_WARN("missed keep-alive from server (%d/%d)", m_keepAliveFailures, s_maxKeepAliveFailures);
+    // Reset the timer to check again
+    resetKeepAliveAlarm();
+  }
 }
 
 void ServerProxy::onInfoChanged()

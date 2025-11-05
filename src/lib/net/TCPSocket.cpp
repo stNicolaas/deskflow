@@ -448,35 +448,25 @@ ISocketMultiplexerJob *TCPSocket::serviceConnecting(ISocketMultiplexerJob *job, 
 {
   Lock lock(&m_mutex);
 
-  // should only check for errors if error is true but checking a new
-  // socket (and a socket that's connecting should be new) for errors
-  // should be safe and Mac OS X appears to have a bug where a
-  // non-blocking stream socket that fails to connect immediately is
-  // reported by select as being writable (i.e. connected) even when
-  // the connection has failed.  this is easily demonstrated on OS X
-  // 10.3.4 by starting a deskflow client and telling to connect to
-  // another system that's not running a deskflow server.  it will
-  // claim to have connected then quickly disconnect (i guess because
-  // read returns 0 bytes).  unfortunately, deskflow attempts to
-  // reconnect immediately, the process repeats and we end up
-  // spinning the CPU.  luckily, OS X does set SO_ERROR on the
-  // socket correctly when the connection has failed so checking for
-  // errors works.  (curiously, sometimes OS X doesn't report
-  // connection refused.  when that happens it at least doesn't
-  // report the socket as being writable so deskflow is able to time
-  // out the attempt.)
-  if (error || true) {
-    try {
-      // connection may have failed or succeeded
-      ARCH->throwErrorOnSocket(m_socket);
-    } catch (const ArchNetworkException &e) {
-      sendConnectionFailedEvent(e.what());
-      onDisconnected();
-      return newJob();
-    }
+  // Always check for connection errors using SO_ERROR.
+  // This is necessary because some platforms (notably older macOS versions)
+  // incorrectly report failed connections as writable. By always checking
+  // SO_ERROR, we can detect connection failures early and avoid spinning
+  // the CPU with rapid reconnection attempts.
+  // Modern systems handle this correctly, and checking SO_ERROR on a
+  // successfully connected socket returns 0, so this is safe to do always.
+  try {
+    // Check if connection succeeded or failed via SO_ERROR
+    ARCH->throwErrorOnSocket(m_socket);
+  } catch (const ArchNetworkException &e) {
+    // Connection failed
+    sendConnectionFailedEvent(e.what());
+    onDisconnected();
+    return newJob();
   }
 
   if (write) {
+    // Socket is writable and no errors - connection succeeded
     sendEvent(EventTypes::DataSocketConnected);
     onConnected();
     return newJob();

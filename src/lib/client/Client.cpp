@@ -149,13 +149,13 @@ void Client::disconnect(const char *msg)
   }
 }
 
-void Client::refuseConnection(const char *msg)
+void Client::refuseConnection(const char *msg, bool retry)
 {
   cleanup();
 
   if (msg) {
-    auto info = new FailInfo(msg);
-    info->m_retry = true;
+    auto *info = new FailInfo(msg);
+    info->m_retry = retry;
     Event event(EventTypes::ClientConnectionRefused, getEventTarget(), info, Event::EventFlags::DontFreeData);
     m_events->addEvent(event);
   }
@@ -165,6 +165,7 @@ void Client::handshakeComplete()
 {
   m_ready = true;
   m_screen->enable();
+  LOG_INFO("connection handshake complete, client is ready");
   sendEvent(EventTypes::ClientConnected, nullptr);
 }
 
@@ -504,7 +505,7 @@ void Client::cleanupStream()
 
 void Client::handleConnected()
 {
-  LOG_DEBUG1("connected, waiting for hello");
+  LOG_INFO("socket connected to server, waiting for hello");
   cleanupConnecting();
   setupConnection();
 
@@ -523,7 +524,7 @@ void Client::handleConnectionFailed(const Event &event)
   cleanupTimer();
   cleanupConnecting();
   cleanupStream();
-  LOG_DEBUG1("connection failed");
+  LOG_WARN("connection failed: %s", info->m_what.c_str());
   sendConnectionFailedEvent(info->m_what.c_str());
   delete info;
 }
@@ -534,8 +535,8 @@ void Client::handleConnectTimeout()
   cleanupConnecting();
   cleanupConnection();
   cleanupStream();
-  LOG_DEBUG1("connection timed out");
-  sendConnectionFailedEvent("Timed out");
+  LOG_WARN("connection attempt timed out after 2 seconds");
+  sendConnectionFailedEvent("connection timed out");
 }
 
 void Client::handleOutputError()
@@ -552,7 +553,7 @@ void Client::handleDisconnected()
   cleanupTimer();
   cleanupScreen();
   cleanupConnection();
-  LOG_DEBUG1("disconnected");
+  LOG_WARN("disconnected from server");
   sendEvent(EventTypes::ClientDisconnected, nullptr);
 }
 

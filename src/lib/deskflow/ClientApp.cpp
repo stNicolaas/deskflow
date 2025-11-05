@@ -57,12 +57,40 @@
 #include <memory>
 #include <sstream>
 #include <stdio.h>
+#include <random>
 
 constexpr static auto s_retryTime = 1.0;
 
 ClientApp::ClientApp(IEventQueue *events, const QString &processName) : App(events, processName)
 {
   // do nothing
+}
+
+double ClientApp::calculateRetryDelay()
+{
+  // Exponential backoff with jitter
+  // Base delay starts at s_minRetryDelay and doubles each time, up to s_maxRetryDelay
+  double baseDelay = s_minRetryDelay * std::pow(2.0, std::min(m_retryAttempts, 6));
+  baseDelay = std::min(baseDelay, s_maxRetryDelay);
+
+  // Add jitter (±25% random variation) to prevent thundering herd
+  static std::random_device rd;
+  static std::mt19937 gen(rd());
+  std::uniform_real_distribution<> jitter(0.75, 1.25);
+
+  m_currentRetryDelay = baseDelay * jitter(gen);
+  m_retryAttempts++;
+
+  LOG_DEBUG("retry attempt %d, delay %.2f seconds", m_retryAttempts, m_currentRetryDelay);
+
+  return m_currentRetryDelay;
+}
+
+void ClientApp::resetRetryState()
+{
+  m_retryAttempts = 0;
+  m_currentRetryDelay = s_minRetryDelay;
+  LOG_DEBUG("retry state reset");
 }
 
 void ClientApp::parseArgs()
@@ -184,9 +212,11 @@ void ClientApp::scheduleClientRestart(double retryTime)
   getEvents()->addHandler(EventTypes::Timer, timer, [this, timer](const auto &e) { handleClientRestart(e, timer); });
 }
 
-void ClientApp::handleClientConnected() const
+void ClientApp::handleClientConnected()
 {
   LOG_IPC("connected to server");
+  // Reset retry state on successful connection
+  const_cast<ClientApp *>(this)->resetRetryState();
 }
 
 void ClientApp::handleClientFailed(const Event &e)
@@ -196,7 +226,9 @@ void ClientApp::handleClientFailed(const Event &e)
 
     LOG_WARN("failed to connect to server=%s, trying next address", info->m_what.c_str());
     if (!m_suspended) {
-      scheduleClientRestart(s_retryTime);
+      // Use exponential backoff for multi-address retry
+      double retryDelay = calculateRetryDelay();
+      scheduleClientRestart(retryDelay);
     }
   } else {
     m_lastServerAddressIndex = 0;
@@ -210,11 +242,23 @@ void ClientApp::handleClientRefused(const Event &e)
 
   if (!info->m_retry) {
     LOG_ERR("failed to connect to server: %s", info->m_what.c_str());
+    resetRetryState();
     getEvents()->addEvent(Event(EventTypes::Quit));
   } else {
-    LOG_WARN("failed to connect to server: %s", info->m_what.c_str());
+    // Check if we've exceeded max retry attempts
+    if (m_retryAttempts >= s_maxRetryAttempts) {
+      LOG_ERR("exceeded maximum retry attempts (%d), giving up: %s", s_maxRetryAttempts, info->m_what.c_str());
+      resetRetryState();
+      getEvents()->addEvent(Event(EventTypes::Quit));
+      return;
+    }
+
+    // Use exponential backoff with jitter for retries
+    double retryDelay = calculateRetryDelay();
+    LOG_WARN("failed to connect to server: %s (will retry in %.1f seconds)", info->m_what.c_str(), retryDelay);
+
     if (!m_suspended) {
-      scheduleClientRestart(s_retryTime);
+      scheduleClientRestart(retryDelay);
     }
   }
 }
@@ -223,7 +267,10 @@ void ClientApp::handleClientDisconnected()
 {
   LOG_IPC("disconnected from server");
   if (!m_suspended) {
-    scheduleClientRestart(s_retryTime);
+    // Use exponential backoff for reconnection attempts
+    double retryDelay = calculateRetryDelay();
+    LOG_INFO("will attempt to reconnect in %.1f seconds", retryDelay);
+    scheduleClientRestart(retryDelay);
   }
 }
 
