@@ -251,9 +251,14 @@ void TCPSocket::connect(const NetworkAddress &addr)
   {
     Lock lock(&m_mutex);
 
-    // fail on attempts to reconnect
-    if (m_socket == nullptr || m_connected) {
-      sendConnectionFailedEvent("busy");
+    // Fail on attempts to reconnect or use a closed socket
+    if (m_socket == nullptr) {
+      sendConnectionFailedEvent("socket is closed or not initialized");
+      return;
+    }
+
+    if (m_connected) {
+      sendConnectionFailedEvent("socket is already connected");
       return;
     }
 

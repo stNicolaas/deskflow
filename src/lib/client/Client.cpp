@@ -90,9 +90,11 @@ Client::~Client()
 void Client::connect(size_t addressIndex)
 {
   if (m_stream != nullptr) {
+    LOG_WARN("connect() called while already connecting or connected, ignoring");
     return;
   }
   if (m_suspended) {
+    LOG_DEBUG("connect() called while suspended, will connect on resume");
     m_connectOnResume = true;
     return;
   }
@@ -456,7 +458,11 @@ void Client::cleanup()
 void Client::cleanupConnecting()
 {
   if (m_stream != nullptr) {
+    // Remove both TLS and non-TLS connection handlers
+    // We register different handlers based on TLS setting, but cleanup should remove both
+    // to prevent handler leaks when TLS is enabled
     m_events->removeHandler(EventTypes::DataSocketConnected, m_stream->getEventTarget());
+    m_events->removeHandler(EventTypes::DataSocketSecureConnected, m_stream->getEventTarget());
     m_events->removeHandler(EventTypes::DataSocketConnectionFailed, m_stream->getEventTarget());
   }
 }
